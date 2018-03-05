@@ -11,9 +11,9 @@ var serveCmd = &cobra.Command{
 	Long:  `Serve, start the server app to serve http`,
 	Run: func(cmd *cobra.Command, args []string) {
 		var app = app.Kernel{}
-		app.Construct() // wrapping up some monster components together
+		app.Init() // wrapping up some components together
 		app.ParseSwaggerAPIEndpoints()
-		app.RegisterNonAPIGatewayRoutes()
+		app.RegisterRoutes()
 
 		app.Run() // waking up the monster!
 	},

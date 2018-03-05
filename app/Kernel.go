@@ -4,72 +4,13 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
-	"strings"
+	"time"
 
-	"github.com/fahribaharudin/api_gateway/app/controllers"
-	"github.com/gin-gonic/gin"
+	"github.com/gorilla/mux"
+	"github.com/urfave/negroni"
 )
-
-/************************************/
-/******* KERNEL / APPLICATION *******/
-/************************************/
-
-// Kernel is the main app wrapper object
-type Kernel struct {
-	APIGatewayRouter RoutesWrapper
-}
-
-// Construct is the Kernel constructor ..
-func (app *Kernel) Construct() {
-	app.APIGatewayRouter = RoutesWrapper{}
-	app.APIGatewayRouter.Router = gin.Default()
-}
-
-// ParseSwaggerAPIEndpoints is parsing swagger file and register it routes to the api gateway
-func (app *Kernel) ParseSwaggerAPIEndpoints() {
-
-	var swaggerAPI map[string]interface{}
-
-	jsonFileContent, err := ioutil.ReadFile("./petstore.swagger.json")
-	if err != nil {
-		log.Println(err)
-		os.Exit(0)
-	}
-
-	err = json.Unmarshal(jsonFileContent, &swaggerAPI)
-	if err != nil {
-		log.Println(err)
-		os.Exit(0)
-	}
-
-	for path, pathDefinitions := range swaggerAPI["paths"].(map[string]interface{}) {
-		for method := range pathDefinitions.(map[string]interface{}) {
-			app.APIGatewayRouter.AddEndpoint(path, method)
-		}
-	}
-}
-
-// Run the app!
-func (app *Kernel) Run() {
-
-	// add some middleware
-	app.APIGatewayRouter.Router.Use(func() gin.HandlerFunc {
-		return func(c *gin.Context) {
-			log.Println("Middleware start..")
-
-			c.Next()
-
-			log.Println("MIddleware end..")
-		}
-	}())
-
-	// handling api gateway router
-	app.APIGatewayRouter.Handle()
-
-	// run the app
-	app.APIGatewayRouter.Router.Run(":8000")
-}
 
 /************************************/
 /********** ROUTER ENGINE ***********/
@@ -78,7 +19,7 @@ func (app *Kernel) Run() {
 // RoutesWrapper is the main object of application router
 type RoutesWrapper struct {
 	Endpoints []Endpoint
-	Router    *gin.Engine
+	Router    *mux.Router
 }
 
 // Endpoint object to model some specific endpoints
@@ -102,30 +43,79 @@ func (r *RoutesWrapper) AddEndpoint(path string, method string, handler ...inter
 func (r *RoutesWrapper) Handle() {
 	// iterate over the stored endpoints
 	for _, route := range r.Endpoints {
-		APIGatewayController := controllers.APIGatewayController{}
-		switch strings.ToLower(route.Method) {
-		case "get":
-			r.Router.GET(route.Path, APIGatewayController.GetHandler)
-			break
+		r.Router.HandleFunc(route.Path, baseController.APIGatewayController.UniversalHandler).Methods(
+			"GET", "POST", "PUT", "PATCH", "DELETE",
+		)
+	}
+}
 
-		case "post":
-			r.Router.POST(route.Path, APIGatewayController.PostHandler)
-			break
+/************************************/
+/******* KERNEL / APPLICATION *******/
+/************************************/
 
-		case "put":
-			r.Router.PUT(route.Path, APIGatewayController.PostHandler)
-			break
+// Kernel is the main app wrapper object
+type Kernel struct {
+	APIGatewayRouter RoutesWrapper
+}
 
-		case "patch":
-			r.Router.PATCH(route.Path, APIGatewayController.PatchHandler)
+// Init is the Kernel constructor ..
+func (app *Kernel) Init() {
+	app.APIGatewayRouter = RoutesWrapper{}
+	app.APIGatewayRouter.Router = mux.NewRouter()
+}
 
-		case "delete":
-			r.Router.DELETE(route.Path, APIGatewayController.DeleteHandler)
-			break
+// ParseSwaggerAPIEndpoints is parsing swagger file and register it routes to the api gateway
+func (app *Kernel) ParseSwaggerAPIEndpoints() {
 
-		default:
-			log.Println("The http method: " + route.Method + " is not supported by this api gateway")
-			break
+	var swaggerAPI map[string]interface{}
+
+	jsonFileContent, err := ioutil.ReadFile("./petstore.swagger.json")
+	if err != nil {
+		log.Println(err)
+		os.Exit(0)
+	}
+
+	err = json.Unmarshal(jsonFileContent, &swaggerAPI)
+	if err != nil {
+		log.Println(err)
+		os.Exit(0)
+	}
+
+	for path, pathDefinitions := range swaggerAPI["paths"].(map[string]interface{}) {
+		for method, definition := range pathDefinitions.(map[string]interface{}) {
+			deprecated := definition.(map[string]interface{})["deprecated"]
+			if deprecated != nil && deprecated == true {
+				continue
+			}
+
+			app.APIGatewayRouter.AddEndpoint(path, method)
 		}
 	}
+}
+
+// Run the app!
+func (app *Kernel) Run() {
+
+	// handling api gateway router
+	app.APIGatewayRouter.Handle()
+
+	// add some middleware
+	n := negroni.Classic()
+	n.Use(negroni.HandlerFunc(func(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+		// before middleware..
+		next(rw, r)
+		// after middleware..
+	}))
+	n.UseHandler(app.APIGatewayRouter.Router)
+
+	// run the app
+	server := http.Server{
+		Addr:         ":8000",
+		Handler:      n,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	log.Println("Server running on http://localhost:8000")
+	server.ListenAndServe()
 }

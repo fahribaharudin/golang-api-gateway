@@ -4,5 +4,7 @@ import:
   version: v0.0.1
 - package: github.com/spf13/viper
   version: v1.0.0
-- package: github.com/gin-gonic/gin
-  version: v1.2
+- package: github.com/urfave/negroni
+  version: v0.3.0
+- package: github.com/gorilla/mux
+  version: v1.6.1
