@@ -1,121 +1,61 @@
 package app
 
 import (
-	"encoding/json"
-	"io/ioutil"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/fahribaharudin/api_gateway/app/controllers"
 	"github.com/gorilla/mux"
 	"github.com/urfave/negroni"
 )
 
-/************************************/
-/********** ROUTER ENGINE ***********/
-/************************************/
-
-// RoutesWrapper is the main object of application router
-type RoutesWrapper struct {
-	Endpoints []Endpoint
-	Router    *mux.Router
-}
-
-// Endpoint object to model some specific endpoints
-type Endpoint struct {
-	Path    string
-	Method  string
-	Handler interface{}
-}
-
-// AddEndpoint used to define new endpoint to the app
-func (r *RoutesWrapper) AddEndpoint(path string, method string, handler ...interface{}) {
-	var endpoint = Endpoint{Path: path, Method: method}
-	if len(handler) > 0 {
-		endpoint.Handler = handler[0]
-	}
-
-	r.Endpoints = append(r.Endpoints, endpoint)
-}
-
-// Handle the dispatching process
-func (r *RoutesWrapper) Handle() {
-	// iterate over the stored endpoints
-	for _, route := range r.Endpoints {
-		r.Router.HandleFunc(route.Path, baseController.APIGatewayController.UniversalHandler).Methods(
-			"GET", "POST", "PUT", "PATCH", "DELETE",
-		)
-	}
-}
-
-/************************************/
-/******* KERNEL / APPLICATION *******/
-/************************************/
-
-// Kernel is the main app wrapper object
+// Kernel is the app skeleton
 type Kernel struct {
-	APIGatewayRouter RoutesWrapper
+	Router      *mux.Router
+	Middleware  *negroni.Negroni
+	Controllers Controllers
+	HTTPHandler http.Handler
 }
 
-// Init is the Kernel constructor ..
-func (app *Kernel) Init() {
-	app.APIGatewayRouter = RoutesWrapper{}
-	app.APIGatewayRouter.Router = mux.NewRouter()
+// Controllers is a wrapper of all the controllers
+type Controllers struct {
+	APIGateway *controllers.APIGateway
 }
 
-// ParseSwaggerAPIEndpoints is parsing swagger file and register it routes to the api gateway
-func (app *Kernel) ParseSwaggerAPIEndpoints() {
-
-	var swaggerAPI map[string]interface{}
-
-	jsonFileContent, err := ioutil.ReadFile("./petstore.swagger.json")
-	if err != nil {
-		log.Println(err)
-		os.Exit(0)
-	}
-
-	err = json.Unmarshal(jsonFileContent, &swaggerAPI)
-	if err != nil {
-		log.Println(err)
-		os.Exit(0)
-	}
-
-	for path, pathDefinitions := range swaggerAPI["paths"].(map[string]interface{}) {
-		for method, definition := range pathDefinitions.(map[string]interface{}) {
-			deprecated := definition.(map[string]interface{})["deprecated"]
-			if deprecated != nil && deprecated == true {
-				continue
-			}
-
-			app.APIGatewayRouter.AddEndpoint(path, method)
-		}
+// Bootstrap the app Kernel
+func (app *Kernel) Bootstrap() {
+	app.Router = mux.NewRouter()
+	app.Middleware = negroni.Classic()
+	app.Controllers = Controllers{
+		APIGateway: &controllers.APIGateway{},
 	}
 }
 
-// Run the app!
+// Run the application
 func (app *Kernel) Run() {
+	if (app.Controllers == Controllers{}) {
+		fmt.Println("No controllers defined in the app kernel, You should call the Bootstrap() method first before running the app")
+		os.Exit(0)
+	}
 
-	// handling api gateway router
-	app.APIGatewayRouter.Handle()
+	// registering all the endpoint handler (routes) to the router
+	app.RegisterRoutes()
 
-	// add some middleware
-	n := negroni.Classic()
-	n.Use(negroni.HandlerFunc(func(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
-		// before middleware..
-		next(rw, r)
-		// after middleware..
-	}))
-	n.UseHandler(app.APIGatewayRouter.Router)
+	// registering the global middleware
+	app.Middleware.Use(negroni.HandlerFunc(app.Middlewares().ACustomMiddleware))
+	app.Middleware.UseHandler(app.Router)
+	app.HTTPHandler = app.Middleware
 
-	// run the app
-	server := http.Server{
+	// make the server
+	server := &http.Server{
 		Addr:         ":8000",
-		Handler:      n,
+		Handler:      app.HTTPHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
-
-	log.Println("Server running on http://localhost:8000")
+	log.Println("Server listening on port" + server.Addr)
 	server.ListenAndServe()
 }
